@@ -1,0 +1,4 @@
+Attempting to initialize Shopify API...
+Initialization FAILED:
+Cannot initialize Shopify API Library. Missing values for: apiVersion. For apiVersion, please specify an explicit API version (e.g., ApiVersion.July25). See https://shopify.dev/docs/api/usage/versioning for more information.
+{}

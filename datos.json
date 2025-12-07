@@ -1,0 +1,13 @@
+{
+    "items": [
+        {
+            "variantId": "gid://shopify/ProductVariant/46433557348522",
+            "quantity": 1
+        }
+    ],
+    "customer": {
+        "firstName": "Cliente",
+        "lastName": "Archivo",
+        "email": "archivo@test.com"
+    }
+}
