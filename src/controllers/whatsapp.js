@@ -1,107 +1,115 @@
 const axios = require('axios');
+const admin = require('firebase-admin');
+const path = require('path');
 const shopifyService = require('../services/shopify');
+const aiService = require('../services/ai'); // <--- NUEVO IMPORT
 
-const BANK_INSTRUCTIONS = process.env.BANK_INSTRUCTIONS || "Por definirse";
+// Configuración Firebase (Igual que antes)
+const serviceAccount = require(path.join(__dirname, '../../firebase-key.json'));
+if (!admin.apps.length) {
+    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+}
+const db = admin.firestore();
+
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 
 module.exports = {
     handleMessage: async (req, res) => {
         try {
-            // 1. Verificación del Webhook (Lo que ya funcionaba)
+            // Verificación Webhook (Igual)
             if (req.method === 'GET') {
-                if (req.query['hub.mode'] === 'subscribe' &&
-                    req.query['hub.verify_token'] === 'mm_verificacion_123') {
+                if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === 'mm_verificacion_123') {
                     return res.status(200).send(req.query['hub.challenge']);
-                }
-                return res.sendStatus(403);
+                } return res.sendStatus(403);
             }
 
-            // 2. Procesar Mensaje Entrante (POST)
             const body = req.body;
-            console.log('📨 Mensaje recibido:', JSON.stringify(body, null, 2));
+            if (body.object !== 'whatsapp_business_account' || !body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]) {
+                return res.sendStatus(200);
+            }
 
-            // Verificar si es un mensaje de texto de WhatsApp
-            if (body.object === 'whatsapp_business_account' &&
-                body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]) {
+            const message = body.entry[0].changes[0].value.messages[0];
+            const from = message.from;
+            const textBody = message.text?.body?.trim() || "";
+            const phoneID = body.entry[0].changes[0].value.metadata.phone_number_id;
 
-                const message = body.entry[0].changes[0].value.messages[0];
-                const from = message.from; // Número del cliente
-                const messageId = message.id;
-                const textBody = message.text?.body || "";
+            console.log(`📩 Mensaje de ${from}: ${textBody}`);
 
-                // Extraemos el ID del teléfono del negocio para saber a quién responder
-                const phoneID = body.entry[0].changes[0].value.metadata.phone_number_id;
+            // 1. Firebase: Referencias
+            const userRef = db.collection('clientes').doc(from);
+            const chatRef = userRef.collection('historial_chat');
 
-                // --- CEREBRO DEL BOT ---
-                let responseText = "";
+            // 2. Guardar mensaje del USUARIO
+            await chatRef.add({
+                rol: 'usuario',
+                texto: textBody,
+                timestamp: admin.firestore.FieldValue.serverTimestamp()
+            });
 
-                // Lógica simple: Si dice "comprar" y trae un ID largo, compra. Si no, busca.
-                // Ejemplo de compra: "comprar gid://shopify/ProductVariant/123456789"
-                if (textBody.toLowerCase().startsWith('comprar') && textBody.includes('gid://')) {
-                    // Intento de compra
-                    const variantId = textBody.split(' ')[1]; // Tomamos lo que sigue a "comprar"
-                    if (variantId) {
-                        // Simulamos datos del cliente (En un bot real, se pedirían antes)
-                        const customer = {
-                            firstName: "Cliente",
-                            lastName: "WhatsApp",
-                            email: "pedido@whatsapp.com"
-                        };
+            // 3. Obtener o Crear Cliente
+            const userDoc = await userRef.get();
+            let userData;
+            if (!userDoc.exists) {
+                userData = {
+                    perfil: { nombre: message.profile?.name || "Amigo", shopifyCustomerId: "", esRecurrente: false },
+                    estado_conversacion: { step: "escuchando", ultimoMensaje: new Date().toISOString() },
+                    metadata: { necesitaAtencionHumana: false }
+                };
+                await userRef.set(userData);
+            } else {
+                userData = userDoc.data();
+            }
 
-                        try {
-                            const result = await shopifyService.crearPedidoManual([{ variantId, quantity: 1 }], customer);
-                            responseText = `✅ *¡Pedido Creado!* \n\n📄 Orden: ${result.orderNumber}\n💰 Total: ${result.totalPrice}\n\n${BANK_INSTRUCTIONS}`;
-                        } catch (error) {
-                            console.error(error);
-                            responseText = "❌ Hubo un error creando el pedido. Verifica que el ID sea correcto.";
-                        }
-                    } else {
-                        responseText = "⚠️ Para comprar, envía: comprar [ID_DEL_PRODUCTO]";
-                    }
-                } else {
-                    // Búsqueda de producto (Cualquier otro texto)
-                    responseText = `🔎 Buscando "${textBody}" en la tienda...`;
-                    // Enviamos mensaje de "escribiendo..." (opcional, pero buena UX)
-                    // ...
+            // 🚨 SI ESTÁ EN MODO HUMANO, IGNORAR AL BOT
+            if (userData.metadata.necesitaAtencionHumana) {
+                console.log("⏸️ Chat pausado (Modo Humano)");
+                return res.sendStatus(200);
+            }
 
-                    const products = await shopifyService.buscarProductos(textBody);
-                    if (products.length > 0) {
-                        responseText = products.map(p =>
-                            `📦 *${p.title}*\n💰 ${p.price} ${p.currency}\n🆔 ID para comprar: \`${p.variantId}\``
-                        ).join('\n\n----------------\n\n');
-                        responseText += "\n\n👇 *Para comprar, copia y pega el ID así:*\ncomprar gid://shopify/..."
-                    } else {
-                        responseText = `❌ No encontramos productos relacionados con "${textBody}". Intenta con otra palabra (ej: Collar, Alimento).`;
-                    }
-                }
+            // 4. PREPARAR CONTEXTO PARA GEMINI
+            // Traemos los últimos 6 mensajes para que tenga memoria reciente
+            const historialSnapshot = await chatRef.orderBy('timestamp', 'desc').limit(6).get();
+            // Invertimos para que queden en orden cronológico (Viejo -> Nuevo)
+            const historialParaAI = historialSnapshot.docs.map(doc => doc.data()).reverse();
 
-                // 3. RESPONDER A WHATSAPP (La parte que faltaba)
+            // 5. ✨ MAGIA DE IA ✨
+            // Aquí Gemini piensa, busca en Shopify si hace falta y decide qué decir
+            const aiResponse = await aiService.generarRespuesta(textBody, historialParaAI, userData.perfil);
+
+            let responseText = aiResponse.text;
+
+            // Si Gemini activó el "Botón de Pánico" (Escalar a Humano)
+            if (aiResponse.action === "HANDOVER") {
+                userData.metadata.necesitaAtencionHumana = true;
+                await userRef.update({ 'metadata.necesitaAtencionHumana': true });
+            }
+
+            // 6. Enviar respuesta a WhatsApp
+            if (responseText) {
                 await axios({
                     method: 'POST',
                     url: `https://graph.facebook.com/v17.0/${phoneID}/messages`,
                     data: {
                         messaging_product: 'whatsapp',
                         to: from,
-                        text: { body: responseText },
-                        // Respondemos al mensaje específico (Reply)
-                        context: { message_id: messageId }
+                        text: { body: responseText }
                     },
-                    headers: {
-                        'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
-                        'Content-Type': 'application/json'
-                    }
+                    headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' }
+                });
+
+                // Guardar respuesta del BOT
+                await chatRef.add({
+                    rol: 'bot',
+                    texto: responseText,
+                    timestamp: admin.firestore.FieldValue.serverTimestamp()
                 });
             }
 
             return res.sendStatus(200);
 
         } catch (error) {
-            console.error('🔥 Error General:', error.response ? error.response.data : error.message);
+            console.error('🔥 Error:', error);
             return res.sendStatus(500);
         }
-    },
-
-    // Mantenemos estas funciones por si las usas en los tests manuales
-    processPurchase: async (items, customerData) => { /* ... lo mismo de antes ... */ },
-    processSearch: async (keyword) => { /* ... lo mismo de antes ... */ }
+    }
 };
