@@ -30,12 +30,18 @@ const client = new shopify.clients.Graphql({ session });
  * @param {string} keyword - Palabra clave para buscar
  * @returns {Promise<Array>} - Lista de productos con nombre, precio y disponibilidad
  */
+// En shopify.js
 async function buscarProductos(keyword) {
   try {
+    // ⚠️ EL CAMBIO MAESTRO:
+    // Al quitar "title:", permitimos que Ana use "tag:", "product_type:", etc.
+    // Solo mantenemos el filtro de status:ACTIVE para no vender cosas archivadas.
+    const queryOptimized = `${keyword} AND status:ACTIVE`;
+
     const response = await client.request(
       `
         query {
-          products(first: 5, query: "title:*${keyword}* AND status:ACTIVE") {
+          products(first: 5, query: "${queryOptimized}") {
             edges {
               node {
                 title

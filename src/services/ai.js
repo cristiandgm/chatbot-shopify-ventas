@@ -11,11 +11,11 @@ const toolsDefinition = [
         functionDeclarations: [
             {
                 name: "buscarProductosShopify",
-                description: "Busca productos en el catálogo de la tienda. Úsalo cuando el cliente pregunte precios, recomendaciones o stock.",
+                description: "Busca productos en el catálogo. IMPORTANTE: Antes de llamar a esta función, traduce la jerga del cliente a los Nombres de Marca Oficiales y usa sintaxis de tags si estás segura (ej: tag:'Royal Canin' puppy).",
                 parameters: {
                     type: "OBJECT",
                     properties: {
-                        keyword: { type: "STRING", description: "Término de búsqueda (ej: 'Acana', 'Gato', 'Juguete')" }
+                        keyword: { type: "STRING", description: "La búsqueda optimizada y corregida (No envíes lo que escribió el usuario literalmente)" }
                     },
                     required: ["keyword"]
                 }
@@ -41,94 +41,128 @@ module.exports = {
      */
     generarRespuesta: async (mensajeUsuario, historialChat, perfilCliente) => {
         try {
-            // 1. Configuración del Modelo (Usamos Flash 2.0 por velocidad)
+            // 1. Configuración del Modelo
             const model = genAI.getGenerativeModel({
-                model: "gemini-2.0-flash-exp", // O "gemini-1.5-flash" si prefieres más estabilidad
+                model: "gemini-2.0-flash-exp",
                 tools: toolsDefinition
             });
 
-            // 2. Prompt del Sistema (PERSONALIDAD)
+            // 2. Prompt del Sistema MEJORADO
             const systemInstruction = `
-            Eres 'Ana Gabriela', la asistente humana experta de Mundo Mascotas Colombia.
+            ### ROL Y PERSONALIDAD
+            Eres 'Ana Gabriela', la Asistente Virtual experta de **Mundo Mascotas Colombia**. 
+            Tu tono es: 🇨🇴 Colombiano neutro, muy cálido, empático y organizado.
+            Usa emojis para separar ideas 🐶🐱.
+
+            ### 🧠 EXPERTA EN PRODUCTOS (Modo Detective)
+            Tú NO eres un buscador simple. Eres una traductora de intenciones.
+            El cliente usará jerga, apodos o describirá los empaques. Tu trabajo es deducir qué marca oficial busca.
+
+            **LISTA DE MARCAS QUE VENDEMOS (Solo existen estas):**
+            [Taste of the wild, Royal Canin, Hill's Science Diet, Agility Gold, Chunky, Monello, Nutra Nuggets, Equilibrio]
+
+            **TU LÓGICA DE BÚSQUEDA:**
+            Cuando el cliente pregunte, analiza:
+            1. **Fonética:** ¿Suena parecido? (ej: "Teis" -> Taste of the wild, "Rayan" -> Royal Canin).
+            2. **Visual:** ¿Describe el empaque? (ej: "El del lobo" -> Taste of the wild, "La bolsa amarilla" -> Pedigree/Chunky).
+            3. **Traducción a Shopify:**
+               - NUNCA busques "teis". Busca el tag oficial: \`tag:"Taste of the wild"\`.
+               - Combina el tag con palabras clave simples en inglés o español según corresponda en Shopify.
+               - Ejemplo: Cliente dice "Busco la teis de salmón azul". 
+               - Tú buscas: \`tag:"Taste of the wild" salmon\` (Omitiste "azul" porque "salmon" es más relevante para el buscador, o lo incluyes si crees que es un tag).
+
+            ### DATOS DEL CLIENTE
+            - Nombre: "${perfilCliente.nombre || "Amigo/a"}"
+            - Tipo: "${perfilCliente.esRecurrente ? "Cliente Frecuente (Agradécele su lealtad)" : "Cliente Nuevo (Dale una cálida bienvenida)"}"
+
+            ### ⚠️ REGLAS DE NEGOCIO (Tus mandamientos)
+            1. **Pedido Mínimo:** Para procesar CUALQUIER compra, el pedido debe sumar mínimo **$150.000 COP**. Si el cliente quiere menos, es OBLIGATORIO sugerir amablemente agregar snacks o juguetes.
+            2. **Solo Domicilios:** NO existe recogida. Todo es a domicilio.
+            3. **Pagos:**
+               - Sin Recargo: Transferencia Bancaria (Bold/Llaves), Nequi, Daviplata.
+               - Con Recargo (+5%): Datáfono, Links de pago, Efectivo.
+
+            ### POLÍTICAS DE ENVÍO
+            - **Bogotá:** Gratis. Se entrega de Lunes a Sábado (8am-5pm). SE DEBE programar con 1 día de anticipación.
+            - **Nacional:** Cliente paga flete contra entrega o anticipado. 1-3 días hábiles.
+
+            ### 🎨 FORMATO DE RESPUESTA (ESTILO WHATSAPP)
             
-            DATOS DEL CLIENTE ACTUAL:
-            - Nombre: ${perfilCliente.nombre || "Amigo"}
-            - Historial: ${perfilCliente.esRecurrente ? "Cliente frecuente" : "Cliente nuevo"}
+            **CASO 1: CUANDO EXPLICAS REGLAS O LOGÍSTICA (IMPORTANTE)**
+            Si debes explicar horarios, mínimos de compra o envíos, NO uses párrafos largos. Usa listas numeradas con negritas para que se vea ordenado.
+            Ejemplo ideal:
+            "Te explico cómo funcionamos:
+            1. **Sobre el envío:** [Explicación corta] 🚚
+            2. **Sobre el pago:** [Explicación corta] 💰"
 
-            TUS REGLAS DE ORO:
-            1. **Tono:** Cercano, empático y profesional. Usa emojis moderadamente 🐶.
-            2. **Venta Consultiva:** No des listas frías. Si piden "comida", pregunta para qué mascota (edad/raza) o busca opciones específicas.
-            3. **Stock:** NUNCA inventes precios. Usa SIEMPRE la herramienta 'buscarProductosShopify' para ver qué hay real.
-            4. **Brevedad:** Respuestas cortas y fáciles de leer en WhatsApp.
-            5. **Seguridad:** Si no sabes algo, di que consultarás con un humano.
+            **CASO 2: CUANDO MUESTRAS PRODUCTOS**
+            Usa este formato visual:
+            1. *[Nombre exacto]*
+            💰 Precio: $[Precio]
+            📦 Presentación: [Peso/Tamaño]
+            🔗 [Link]
 
-            OBJETIVO: Ayudar al cliente a encontrar lo que busca y guiarlo a la compra.
+            ### PROTOCOLO DE INTERACCIÓN
+            **FASE 1: DIAGNÓSTICO** -> Pregunta perro/gato, edad y raza antes de buscar.
+            **FASE 2: HERRAMIENTAS** -> Usa buscarProductosShopify para precios reales.
+            **FASE 3: CIERRE** -> Siempre termina con pregunta: "¿Te gustaría incluir esto?" o "¿Te ayudo con el pago?".
+
+            ### REGLAS DE SEGURIDAD
+            - Temas médicos graves -> "Por favor corre al veterinario 🚑".
+            - Links: Pega la URL completa (https://...).
             `;
-
-            // 3. Preparar el Chat (Convertimos tu historial de Firebase al formato de Gemini)
+            // 3. Preparar el Chat 
             let chatHistory = historialChat.map(m => ({
                 role: m.rol === 'usuario' ? 'user' : 'model',
                 parts: [{ text: m.texto }]
             }));
 
-            // --- CORRECCIÓN DEL ERROR ---
-            // Gemini exige que el primer mensaje siempre sea del usuario ('user').
-            // Si el historial empieza con el bot ('model'), borramos ese primer mensaje.
             if (chatHistory.length > 0 && chatHistory[0].role === 'model') {
-                console.log("🧹 Ajustando historial: Eliminando mensaje inicial del bot para cumplir reglas de Gemini.");
-                chatHistory.shift(); // Elimina el primer elemento
+                chatHistory.shift();
             }
 
             const chatSession = model.startChat({
                 history: chatHistory,
                 systemInstruction: { role: 'system', parts: [{ text: systemInstruction }] }
             });
-            // 4. Enviar mensaje inicial a Gemini
+
+            // 4. Enviar mensaje inicial
             console.log("🤖 Consultando a Gemini...");
             const result = await chatSession.sendMessage(mensajeUsuario);
             const response = result.response;
 
-            // --- LÓGICA DE HERRAMIENTAS (FUNCTION CALLING) ---
+            // --- LÓGICA DE HERRAMIENTAS (Igual que antes) ---
             const functionCalls = response.functionCalls();
 
-            // CASO A: Gemini respondió texto normal (sin usar herramientas)
             if (!functionCalls || functionCalls.length === 0) {
                 return { text: response.text(), action: null };
             }
 
-            // CASO B: Gemini quiere usar una herramienta
             const call = functionCalls[0];
             const funcName = call.name;
             const args = call.args;
-
             console.log(`🛠️ Gemini activó herramienta: ${funcName}`);
 
-            // Ejecutamos la herramienta real
             let functionResult = "";
             let actionInfo = null;
 
             if (funcName === "buscarProductosShopify") {
                 const productos = await shopifyService.buscarProductos(args.keyword);
-
-                // Formateamos un poco para ahorrarle tokens a la IA
                 if (productos.length > 0) {
                     functionResult = JSON.stringify(productos.map(p => ({
                         titulo: p.title,
                         precio: p.price,
-                        id: p.variantId,
-                        disponible: p.available
+                        link: `https://mundomascotas.co/products/${p.handle}`,
+                        disponible: p.available ? "Sí" : "Agotado"
                     })));
                 } else {
                     functionResult = "No se encontraron productos con ese nombre.";
                 }
-
             } else if (funcName === "escalarAHumano") {
                 actionInfo = "HANDOVER";
                 functionResult = "Escalamiento confirmado.";
             }
 
-            // 5. Devolvemos el resultado de la herramienta a Gemini para que genere la respuesta final
-            // (El "Round 2" del chat)
             const result2 = await chatSession.sendMessage([
                 {
                     functionResponse: {
@@ -142,8 +176,7 @@ module.exports = {
 
         } catch (error) {
             console.error("🔥 Error en Gemini:", error);
-            // Fallback por si la IA falla
-            return { text: "Estoy teniendo un pequeño lapus mental 😵‍💫. ¿Me podrías repetir eso?", action: null };
+            return { text: "Estoy revisando el sistema y tuve un pequeño error. ¿Me repites lo último?", action: null };
         }
     }
 };
