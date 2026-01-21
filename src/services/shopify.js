@@ -145,7 +145,73 @@ async function crearPedidoManual(items, datosCliente) {
   }
 }
 
+/**
+ * NUEVA FUNCIÓN: Trae todo el inventario de una marca
+ * @param {string} marcaTag - El tag de la marca (ej: "Royal Canin")
+ */
+async function buscarPorMarca(marcaTag) {
+  try {
+    // 1. Query ancha: Solo filtramos por Tag y Estado, traemos MUCHOS (first: 50)
+    const queryOptimized = `tag:"${marcaTag}" AND status:ACTIVE`;
+
+    console.log(`🛒 [Shopify Dump] Descargando catálogo para: "${queryOptimized}"`);
+
+    const response = await client.request(
+      `
+        query {
+          products(first: 50, query: "${queryOptimized}") {
+            edges {
+              node {
+                title
+                handle
+                tags 
+                totalInventory
+                priceRangeV2 {
+                  minVariantPrice {
+                    amount
+                    currencyCode
+                  }
+                }
+                variants(first: 1) {
+                  edges {
+                    node {
+                      id
+                      availableForSale
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `,
+    );
+
+    // ... (Manejo de respuesta body/json igual que antes)
+
+    if (!responseBody.data || !responseBody.data.products) {
+      return [];
+    }
+
+    const products = responseBody.data.products.edges;
+
+    console.log(`✅ [Shopify Dump] Se descargaron ${products.length} referencias de ${marcaTag}.`);
+
+    return products.map(({ node }) => ({
+      title: node.title,
+      handle: node.handle,
+      tags: node.tags, // Pasamos tags a Gemini por si ayudan a identificar (ej: "puppy", "adult")
+      price: parseInt(node.priceRangeV2.minVariantPrice.amount), // Lo paso a número de una vez
+      available: node.totalInventory > 0 || node.variants.edges[0].node.availableForSale
+    }));
+
+  } catch (error) {
+    console.error('🔥 Error trayendo catálogo de marca:', error);
+    return [];
+  }
+}
+
 module.exports = {
-  buscarProductos,
+  buscarPorMarca, // Cambiamos el export
   crearPedidoManual
 };
