@@ -5,7 +5,6 @@ const shopifyService = require('./shopify');
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // --- DEFINICIÓN DE HERRAMIENTAS (TOOLS) ---
-// Aquí le explicamos a Gemini qué "superpoderes" tiene
 const toolsDefinition = [
     {
         functionDeclarations: [
@@ -111,12 +110,14 @@ module.exports = {
             - Temas médicos graves -> "Por favor corre al veterinario 🚑".
             - Links: Pega la URL completa (https://...).
             `;
+
             // 3. Preparar el Chat 
             let chatHistory = historialChat.map(m => ({
                 role: m.rol === 'usuario' ? 'user' : 'model',
                 parts: [{ text: m.texto }]
             }));
 
+            // Corrección de roles alternados (Gemini no permite empezar con 'model')
             if (chatHistory.length > 0 && chatHistory[0].role === 'model') {
                 chatHistory.shift();
             }
@@ -127,27 +128,42 @@ module.exports = {
             });
 
             // 4. Enviar mensaje inicial
-            console.log("🤖 Consultando a Gemini...");
+            // LOG NUEVO
+            console.log("🧠 Gemini: Analizando intención del usuario...");
+
             const result = await chatSession.sendMessage(mensajeUsuario);
             const response = result.response;
 
-            // --- LÓGICA DE HERRAMIENTAS (Igual que antes) ---
+            // --- LÓGICA DE HERRAMIENTAS ---
             const functionCalls = response.functionCalls();
 
             if (!functionCalls || functionCalls.length === 0) {
+                // LOG NUEVO
+                console.log("🧠 Gemini: Respuesta directa (sin herramientas).");
                 return { text: response.text(), action: null };
             }
 
             const call = functionCalls[0];
             const funcName = call.name;
             const args = call.args;
-            console.log(`🛠️ Gemini activó herramienta: ${funcName}`);
+
+            // LOG NUEVO: Ver qué herramienta eligió y con qué parámetros
+            console.log(`🛠️ Gemini activó herramienta: [${funcName}]`);
+            console.log(`   └─ Argumentos recibidos: ${JSON.stringify(args)}`);
 
             let functionResult = "";
             let actionInfo = null;
 
             if (funcName === "buscarProductosShopify") {
+                console.log(`   └─ Ejecutando búsqueda en Shopify...`);
                 const productos = await shopifyService.buscarProductos(args.keyword);
+
+                // LOG NUEVO: Resultados de la búsqueda
+                console.log(`   └─ Productos encontrados: ${productos.length}`);
+                if (productos.length > 0) {
+                    console.log(`   └─ Ejemplo (1ro): ${productos[0].title} - ${productos[0].price}`);
+                }
+
                 if (productos.length > 0) {
                     functionResult = JSON.stringify(productos.map(p => ({
                         titulo: p.title,
@@ -156,13 +172,17 @@ module.exports = {
                         disponible: p.available ? "Sí" : "Agotado"
                     })));
                 } else {
+                    console.log("   └─ Búsqueda vacía. Gemini deberá manejar esto.");
                     functionResult = "No se encontraron productos con ese nombre.";
                 }
             } else if (funcName === "escalarAHumano") {
                 actionInfo = "HANDOVER";
                 functionResult = "Escalamiento confirmado.";
+                console.log("   └─ 🚨 Escalamiento activado.");
             }
 
+            // Enviamos el resultado de vuelta a Gemini para que genere el texto final
+            console.log("🧠 Gemini: Generando respuesta final con datos de herramienta...");
             const result2 = await chatSession.sendMessage([
                 {
                     functionResponse: {
@@ -175,7 +195,7 @@ module.exports = {
             return { text: result2.response.text(), action: actionInfo };
 
         } catch (error) {
-            console.error("🔥 Error en Gemini:", error);
+            console.error("🔥 Error en Gemini (ai.js):", error);
             return { text: "Estoy revisando el sistema y tuve un pequeño error. ¿Me repites lo último?", action: null };
         }
     }

@@ -2,8 +2,7 @@ require('dotenv').config();
 const { shopifyApi, LATEST_API_VERSION, Session } = require('@shopify/shopify-api');
 require('@shopify/shopify-api/adapters/node');
 
-// Initialize Shopify API
-// For a Custom App using only Access Token (Backend only), we set isCustomStoreApp: true
+// Initialize Shopify API (Configuración intacta)
 const shopify = shopifyApi({
   apiKey: process.env.SHOPIFY_API_KEY || 'dummy_key',
   apiSecretKey: process.env.SHOPIFY_API_SECRET || 'dummy_secret',
@@ -30,13 +29,12 @@ const client = new shopify.clients.Graphql({ session });
  * @param {string} keyword - Palabra clave para buscar
  * @returns {Promise<Array>} - Lista de productos con nombre, precio y disponibilidad
  */
-// En shopify.js
 async function buscarProductos(keyword) {
   try {
-    // ⚠️ EL CAMBIO MAESTRO:
-    // Al quitar "title:", permitimos que Ana use "tag:", "product_type:", etc.
-    // Solo mantenemos el filtro de status:ACTIVE para no vender cosas archivadas.
     const queryOptimized = `${keyword} AND status:ACTIVE`;
+
+    // LOG CRUCIAL: Ver exactamente qué le pedimos a Shopify
+    console.log(`🛒 [Shopify Request] Query enviada: "${queryOptimized}"`);
 
     const response = await client.request(
       `
@@ -45,6 +43,7 @@ async function buscarProductos(keyword) {
             edges {
               node {
                 title
+                handle  
                 totalInventory
                 priceRangeV2 {
                   minVariantPrice {
@@ -66,7 +65,7 @@ async function buscarProductos(keyword) {
           }
         }
       `,
-    );
+    ); // He agregado 'handle' arriba para poder generar los links
 
     let responseBody = response;
     if (response.body) {
@@ -76,38 +75,43 @@ async function buscarProductos(keyword) {
     }
 
     if (!responseBody.data || !responseBody.data.products) {
+      console.warn("⚠️ [Shopify] Respuesta vacía o estructura inesperada.");
       return [];
     }
 
     const products = responseBody.data.products.edges;
 
+    // LOG DE RESULTADO
+    console.log(`🛒 [Shopify Response] Productos encontrados: ${products.length}`);
+
     return products.map(({ node }) => ({
       title: node.title,
+      handle: node.handle, // Necesario para crear el link en ai.js
       price: node.priceRangeV2.minVariantPrice.amount,
       currency: node.priceRangeV2.minVariantPrice.currencyCode,
       available: node.totalInventory > 0 || node.variants.edges[0].node.availableForSale,
-      variantId: node.variants.edges[0].node.id // Useful for ordering
+      variantId: node.variants.edges[0].node.id
     }));
+
   } catch (error) {
-    console.error('Error buscando productos:', error);
+    console.error('🔥 Error CRÍTICO buscando en Shopify:', error);
     return [];
   }
 }
 
 /**
  * Crea un pedido manual en Shopify
- * @param {Array} items - Lista de items { variantId, quantity }
- * @param {Object} datosCliente - { email, firstName, lastName }
- * @returns {Promise<Object>} - { orderNumber, totalParams }
  */
 async function crearPedidoManual(items, datosCliente) {
   try {
+    console.log(`📦 [Shopify Order] Intentando crear pedido para: ${datosCliente.email}`);
+
     const restClient = new shopify.clients.Rest({ session });
 
     const orderData = {
       order: {
         line_items: items.map(item => ({
-          variant_id: parseInt(item.variantId.split('/').pop(), 10), // Ensure ID is numeric integer
+          variant_id: parseInt(item.variantId.split('/').pop(), 10),
           quantity: item.quantity
         })),
         customer: {
@@ -128,13 +132,15 @@ async function crearPedidoManual(items, datosCliente) {
 
     const order = response.body.order;
 
+    console.log(`✅ [Shopify Order] Pedido creado con éxito: #${order.name}`);
+
     return {
-      orderNumber: order.name, // e.g. #1025
+      orderNumber: order.name,
       totalPrice: order.total_price
     };
 
   } catch (error) {
-    console.error('Error creando pedido:', error);
+    console.error('🔥 Error creando pedido en Shopify:', error);
     throw error;
   }
 }
