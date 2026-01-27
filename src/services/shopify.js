@@ -2,13 +2,13 @@ require('dotenv').config();
 const { shopifyApi, LATEST_API_VERSION, Session } = require('@shopify/shopify-api');
 require('@shopify/shopify-api/adapters/node');
 
-// Initialize Shopify API (Configuración intacta)
+// Initialize Shopify API
 const shopify = shopifyApi({
   apiKey: process.env.SHOPIFY_API_KEY || 'dummy_key',
   apiSecretKey: process.env.SHOPIFY_API_SECRET || 'dummy_secret',
   scopes: ['read_products', 'write_orders'],
   hostName: process.env.SHOPIFY_SHOP_URL ? process.env.SHOPIFY_SHOP_URL.replace(/https?:\/\//, '') : 'localhost',
-  apiVersion: '2025-10',
+  apiVersion: '2025-01', // <--- CAMBIO: Usa este string directamente
   isEmbeddedApp: false,
   isCustomStoreApp: true,
   adminApiAccessToken: process.env.SHOPIFY_ACCESS_TOKEN,
@@ -25,141 +25,20 @@ const session = new Session({
 const client = new shopify.clients.Graphql({ session });
 
 /**
- * Busca productos en el catálogo de Shopify
- * @param {string} keyword - Palabra clave para buscar
- * @returns {Promise<Array>} - Lista de productos con nombre, precio y disponibilidad
- */
-async function buscarProductos(keyword) {
-  try {
-    const queryOptimized = `${keyword} AND status:ACTIVE`;
-
-    // LOG CRUCIAL: Ver exactamente qué le pedimos a Shopify
-    console.log(`🛒 [Shopify Request] Query enviada: "${queryOptimized}"`);
-
-    const response = await client.request(
-      `
-        query {
-          products(first: 5, query: "${queryOptimized}") {
-            edges {
-              node {
-                title
-                handle  
-                totalInventory
-                priceRangeV2 {
-                  minVariantPrice {
-                    amount
-                    currencyCode
-                  }
-                }
-                variants(first: 1) {
-                  edges {
-                    node {
-                      id
-                      availableForSale
-                      price
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      `,
-    ); // He agregado 'handle' arriba para poder generar los links
-
-    let responseBody = response;
-    if (response.body) {
-      responseBody = response.body;
-    } else if (typeof response.json === 'function') {
-      responseBody = await response.json();
-    }
-
-    if (!responseBody.data || !responseBody.data.products) {
-      console.warn("⚠️ [Shopify] Respuesta vacía o estructura inesperada.");
-      return [];
-    }
-
-    const products = responseBody.data.products.edges;
-
-    // LOG DE RESULTADO
-    console.log(`🛒 [Shopify Response] Productos encontrados: ${products.length}`);
-
-    return products.map(({ node }) => ({
-      title: node.title,
-      handle: node.handle, // Necesario para crear el link en ai.js
-      price: node.priceRangeV2.minVariantPrice.amount,
-      currency: node.priceRangeV2.minVariantPrice.currencyCode,
-      available: node.totalInventory > 0 || node.variants.edges[0].node.availableForSale,
-      variantId: node.variants.edges[0].node.id
-    }));
-
-  } catch (error) {
-    console.error('🔥 Error CRÍTICO buscando en Shopify:', error);
-    return [];
-  }
-}
-
-/**
- * Crea un pedido manual en Shopify
- */
-async function crearPedidoManual(items, datosCliente) {
-  try {
-    console.log(`📦 [Shopify Order] Intentando crear pedido para: ${datosCliente.email}`);
-
-    const restClient = new shopify.clients.Rest({ session });
-
-    const orderData = {
-      order: {
-        line_items: items.map(item => ({
-          variant_id: parseInt(item.variantId.split('/').pop(), 10),
-          quantity: item.quantity
-        })),
-        customer: {
-          first_name: datosCliente.firstName,
-          last_name: datosCliente.lastName,
-          email: datosCliente.email
-        },
-        financial_status: 'pending',
-        tags: 'pedido-whatsapp'
-      }
-    };
-
-    const response = await restClient.post({
-      path: 'orders',
-      type: 'application/json',
-      data: orderData,
-    });
-
-    const order = response.body.order;
-
-    console.log(`✅ [Shopify Order] Pedido creado con éxito: #${order.name}`);
-
-    return {
-      orderNumber: order.name,
-      totalPrice: order.total_price
-    };
-
-  } catch (error) {
-    console.error('🔥 Error creando pedido en Shopify:', error);
-    throw error;
-  }
-}
-
-/**
- * NUEVA FUNCIÓN: Trae todo el inventario de una marca
- * @param {string} marcaTag - El tag de la marca (ej: "Royal Canin")
+ * NUEVA FUNCIÓN: Trae todo el inventario de una marca específica mediante etiquetas (tags)
+ * @param {string} marcaTag - El tag exacto de la marca en Shopify
  */
 async function buscarPorMarca(marcaTag) {
   try {
-    // 1. Query ancha: Solo filtramos por Tag y Estado, traemos MUCHOS (first: 50)
+    // Filtramos solo por etiqueta de marca y productos activos
     const queryOptimized = `tag:"${marcaTag}" AND status:ACTIVE`;
 
-    console.log(`🛒 [Shopify Dump] Descargando catálogo para: "${queryOptimized}"`);
+    console.log(`🛒 [Shopify Request] Descargando catálogo de marca: "${marcaTag}"`);
 
     const response = await client.request(
       `
-        query {
-          products(first: 50, query: "${queryOptimized}") {
+        query($query: String!) {
+          products(first: 50, query: $query) {
             edges {
               node {
                 title
@@ -169,13 +48,11 @@ async function buscarPorMarca(marcaTag) {
                 priceRangeV2 {
                   minVariantPrice {
                     amount
-                    currencyCode
                   }
                 }
                 variants(first: 1) {
                   edges {
                     node {
-                      id
                       availableForSale
                     }
                   }
@@ -185,33 +62,73 @@ async function buscarPorMarca(marcaTag) {
           }
         }
       `,
+      {
+        variables: {
+          query: queryOptimized,
+        },
+      }
     );
 
-    // ... (Manejo de respuesta body/json igual que antes)
+    // Manejo de la estructura de respuesta de la librería @shopify/shopify-api
+    let responseBody = response.body ? response.body : response;
 
     if (!responseBody.data || !responseBody.data.products) {
+      console.warn("⚠️ [Shopify] No se encontraron productos o la respuesta fue inesperada.");
       return [];
     }
 
     const products = responseBody.data.products.edges;
 
-    console.log(`✅ [Shopify Dump] Se descargaron ${products.length} referencias de ${marcaTag}.`);
+    console.log(`✅ [Shopify Response] ${products.length} productos cargados para Gemini.`);
 
+    // Retornamos una estructura limpia para que Gemini analice
     return products.map(({ node }) => ({
       title: node.title,
       handle: node.handle,
-      tags: node.tags, // Pasamos tags a Gemini por si ayudan a identificar (ej: "puppy", "adult")
-      price: parseInt(node.priceRangeV2.minVariantPrice.amount), // Lo paso a número de una vez
+      tags: node.tags.join(", "), // Unimos los tags en un string para búsqueda semántica
+      price: Math.round(parseFloat(node.priceRangeV2.minVariantPrice.amount)),
       available: node.totalInventory > 0 || node.variants.edges[0].node.availableForSale
     }));
 
   } catch (error) {
-    console.error('🔥 Error trayendo catálogo de marca:', error);
+    console.error('🔥 Error en shopify.js (buscarPorMarca):', error);
     return [];
   }
 }
 
+/**
+ * Crea un pedido manual (Mantenemos esta por si la usas más adelante)
+ */
+async function crearPedidoManual(items, datosCliente) {
+  try {
+    const restClient = new shopify.clients.Rest({ session });
+    const orderData = {
+      order: {
+        line_items: items.map(item => ({
+          variant_id: parseInt(item.variantId.split('/').pop(), 10),
+          quantity: item.quantity
+        })),
+        customer: {
+          email: datosCliente.email
+        },
+        financial_status: 'pending'
+      }
+    };
+
+    const response = await restClient.post({
+      path: 'orders',
+      type: 'application/json',
+      data: orderData,
+    });
+
+    return response.body.order;
+  } catch (error) {
+    console.error('🔥 Error creando pedido:', error);
+    throw error;
+  }
+}
+
 module.exports = {
-  buscarPorMarca, // Cambiamos el export
+  buscarPorMarca,
   crearPedidoManual
 };
