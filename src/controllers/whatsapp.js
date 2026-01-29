@@ -2,7 +2,7 @@ const axios = require('axios');
 const admin = require('firebase-admin');
 const path = require('path');
 const shopifyService = require('../services/shopify');
-const aiService = require('../services/ai'); // Ajusta la ruta si es necesario
+const aiService = require('../ai/index'); // Ajusta la ruta si es necesario
 
 // Configuración Firebase (Igual que antes)
 const serviceAccount = require(path.join(__dirname, '../../firebase-key.json'));
