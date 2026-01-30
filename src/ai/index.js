@@ -2,6 +2,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const shopifyService = require('../services/shopify');
 const toolsDefinition = require('./tools'); // Importamos habilidades
 const prompts = require('./prompts');       // Importamos personalidad
+const dbService = require('../services/database');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -38,6 +39,17 @@ module.exports = {
             const call = functionCalls[0];
             let functionResult = "";
             let actionInfo = null;
+
+            if (call.name === "gestionarCarrito") {
+                const whatsappId = perfilCliente.whatsappId;
+                const resultado = await shopifyService.guardarCarrito(whatsappId, call.args.items);
+
+                functionResult = JSON.stringify({
+                    totalActual: resultado.total,
+                    faltante: resultado.cumpleMinimo ? 0 : 150000 - resultado.total,
+                    estado: resultado.cumpleMinimo ? "LISTO_PARA_CIERRE" : "PENDIENTE_MINIMO"
+                });
+            }
 
             if (call.name === "obtenerCatalogoPorMarca") {
                 const productos = await shopifyService.buscarPorMarca(call.args.marcaTag);

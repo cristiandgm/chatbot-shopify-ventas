@@ -94,7 +94,12 @@ module.exports = {
             // 5. ✨ MAGIA DE IA ✨
             // Aquí Gemini piensa, busca en Shopify si hace falta y decide qué decir
             console.log("🚀 Enviando solicitud a Gemini...");
-            const aiResponse = await aiService.generarRespuesta(textBody, historialParaAI, userData.perfil);
+            // Pasamos el ID de WhatsApp dentro del objeto de perfil para que la IA sepa a quién guardar el carrito
+            const aiResponse = await aiService.generarRespuesta(
+                textBody,
+                historialParaAI,
+                { ...userData.perfil, whatsappId: from }
+            );
 
             let responseText = aiResponse.text;
 

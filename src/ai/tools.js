@@ -26,6 +26,27 @@ module.exports = [
                     },
                     required: ["motivo"]
                 }
+            },
+            {
+                name: "gestionarCarrito",
+                description: "Añade productos al carrito persistente en Firebase. Úsalo cuando el cliente confirme un producto.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        items: {
+                            type: "ARRAY",
+                            items: {
+                                type: "OBJECT",
+                                properties: {
+                                    nombre: { type: "STRING" },
+                                    precio: { type: "NUMBER" },
+                                    cantidad: { type: "NUMBER" }
+                                }
+                            }
+                        }
+                    },
+                    required: ["items"]
+                }
             }
         ]
     }
