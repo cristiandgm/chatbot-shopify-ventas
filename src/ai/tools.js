@@ -4,32 +4,21 @@ module.exports = [
         functionDeclarations: [
             {
                 name: "obtenerCatalogoPorMarca",
-                description: "Obtiene TODOS los productos disponibles de una marca específica. Úsalo cuando identifiques la marca que quiere el cliente.",
+                description: "Consulta stock y precios en Shopify. Úsala INMEDIATAMENTE si el cliente menciona un medicamento o alimento, incluso si no te dice la marca exacta. No preguntes la marca si puedes deducirla o buscarla aquí.",
                 parameters: {
                     type: "OBJECT",
                     properties: {
                         marcaTag: {
                             type: "STRING",
-                            description: "El tag EXACTO de la marca en Shopify (ej: 'Taste of the wild', 'Royal Canin')."
+                            description: "Nombre de la marca o tag (ej: 'Vet Life', 'Royal Canin', 'Pro Plan')."
                         }
                     },
                     required: ["marcaTag"]
                 }
             },
             {
-                name: "escalarAHumano",
-                description: "Úsalo SOLO si el cliente está muy enojado o pide hablar con un supervisor.",
-                parameters: {
-                    type: "OBJECT",
-                    properties: {
-                        motivo: { type: "STRING", description: "Razón del escalamiento" }
-                    },
-                    required: ["motivo"]
-                }
-            },
-            {
                 name: "gestionarCarrito",
-                description: "Añade productos al carrito persistente en Firebase. Úsalo cuando el cliente confirme un producto.",
+                description: "Registra productos y verifica si se llega al pedido mínimo de $150.000.",
                 parameters: {
                     type: "OBJECT",
                     properties: {
@@ -46,6 +35,17 @@ module.exports = [
                         }
                     },
                     required: ["items"]
+                }
+            },
+            {
+                name: "escalarAHumano",
+                description: "Usa esto si el cliente pide hablar con una persona real.",
+                parameters: {
+                    type: "OBJECT",
+                    properties: {
+                        motivo: { type: "STRING" }
+                    },
+                    required: ["motivo"]
                 }
             }
         ]

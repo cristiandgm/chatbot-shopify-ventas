@@ -84,7 +84,7 @@ module.exports = {
 
             // 4. PREPARAR CONTEXTO PARA GEMINI
             // Traemos los últimos 6 mensajes para que tenga memoria reciente
-            const historialSnapshot = await chatRef.orderBy('timestamp', 'desc').limit(6).get();
+            const historialSnapshot = await chatRef.orderBy('timestamp', 'desc').limit(10).get();
             // Invertimos para que queden en orden cronológico (Viejo -> Nuevo)
             const historialParaAI = historialSnapshot.docs.map(doc => doc.data()).reverse();
 
