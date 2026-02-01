@@ -1,6 +1,10 @@
-// src/ai/index.js
+/**
+ * ARCHIVO: ai/index.js
+ * DESCRIPCIÓN: Motor de IA de Ana Gabriela. 
+ * Optimizado para capturar detalles importantes en cualquier momento de la charla.
+ */
+
 const { GoogleGenerativeAI } = require("@google/generative-ai");
-const shopifyService = require('../services/shopify');
 const toolsDefinition = require('./tools');
 const prompts = require('./prompts');
 const dbService = require('../services/database');
@@ -15,80 +19,80 @@ module.exports = {
                 tools: toolsDefinition
             });
 
-            // 1. LIMPIEZA DE HISTORIAL PARA EVITAR SALUDOS REPETIDOS
-            // Si ya hay mensajes en el historial, le indicamos internamente que no debe saludar.
-            const yaSaludó = historialChat.some(m => m.rol === 'bot');
-            const instruccionAjustada = yaSaludó
-                ? prompts.systemInstruction(perfilCliente) + "\n**NOTA**: Ya saludaste anteriormente. NO vuelvas a presentarte, ve directo al grano."
-                : prompts.systemInstruction(perfilCliente);
+            // 1. LIMPIEZA DE HISTORIAL (Mantenemos 15 mensajes para contexto real)
+            let historyFiltrado = historialChat
+                .filter(m => m.texto && m.rol)
+                .map(m => ({
+                    role: m.rol === 'usuario' ? 'user' : 'model',
+                    parts: [{ text: m.texto }]
+                }))
+                .slice(-15);
 
-            const chatHistory = historialChat.map(m => ({
-                role: m.rol === 'usuario' ? 'user' : 'model',
-                parts: [{ text: m.texto }]
-            }));
+            while (historyFiltrado.length > 0 && historyFiltrado[0].role === 'model') {
+                historyFiltrado.shift();
+            }
 
-            const chatSession = model.startChat({
-                history: chatHistory,
+            const notasPrevias = perfilCliente.notas_mascota || "";
+
+            const chat = model.startChat({
+                history: historyFiltrado,
                 systemInstruction: {
                     role: 'system',
-                    parts: [{ text: instruccionAjustada }]
+                    parts: [{ text: prompts.systemInstruction(perfilCliente) }]
                 }
             });
 
-            const result = await chatSession.sendMessage(mensajeUsuario);
-            const response = result.response;
-            const functionCalls = response.functionCalls();
+            // 2. RESPUESTA AL CLIENTE
+            const result = await chat.sendMessage(mensajeUsuario);
+            const responseText = result.response.text();
+            const call = result.response.functionCalls()?.[0];
 
-            if (!functionCalls || functionCalls.length === 0) {
-                return { text: response.text(), action: null };
-            }
+            // 3. EXTRACCIÓN CON MEMORIA COMPLETA (CORREGIDO)
+            if (!call) {
+                try {
+                    // Usamos TODO el historial disponible para no perder detalles como "agresivo"
+                    const contextoTotal = historyFiltrado
+                        .map(m => `${m.role === 'user' ? 'Cliente' : 'Ana'}: ${m.parts[0].text}`)
+                        .join("\n");
 
-            const call = functionCalls[0];
-            let functionResult = "";
-            let actionInfo = null;
+                    const instruccionExtraccion = `
+                        ESTADO DE LA MEMORIA ACTUAL: "${notasPrevias}"
+                        
+                        HISTORIAL DE LA CHARLA:
+                        ${contextoTotal}
+                        Último mensaje del cliente: "${mensajeUsuario}"
+                        
+                        TAREA: Revisa TODO el historial arriba. Si el cliente mencionó datos de comportamiento (ej: agresividad, incidentes), 
+                        nombres de mascotas, ubicación o preferencias, redacta una versión actualizada de la memoria.
+                        Si no hay NADA nuevo en todo el historial que no esté ya en la memoria, responde: SIN_CAMBIOS.
+                    `;
 
-            // 2. LÓGICA DE CARRITO REFORZADA
-            if (call.name === "gestionarCarrito") {
-                const resultado = await dbService.guardarCarrito(perfilCliente.whatsappId, call.args.items);
+                    const extractionResult = await model.generateContent(instruccionExtraccion);
+                    const nuevasNotas = extractionResult.response.text().trim();
 
-                // Forzamos una respuesta de herramienta que no deje lugar a dudas
-                const esListo = resultado.total >= 150000;
-                functionResult = JSON.stringify({
-                    totalActual: resultado.total,
-                    cumpleMinimo: esListo,
-                    estado: esListo ? "LISTO_PARA_CIERRE" : "PENDIENTE_MINIMO",
-                    instruccionDirecta: esListo
-                        ? "PEDIDO MÍNIMO SUPERADO. NO pidas más productos. Solicita Cédula y Dirección AHORA."
-                        : `Faltan $${150000 - resultado.total} para el mínimo.`
-                });
-            }
-
-            // 3. CONSULTA DE CATÁLOGO
-            if (call.name === "obtenerCatalogoPorMarca") {
-                const productos = await shopifyService.buscarPorMarca(call.args.marcaTag);
-                functionResult = productos.length > 0
-                    ? JSON.stringify(productos)
-                    : "No hay productos disponibles. Dile al cliente que están súper agotados 😿.";
-            }
-
-            else if (call.name === "escalarAHumano") {
-                actionInfo = "HANDOVER";
-                functionResult = "Escalamiento activado.";
-            }
-
-            // 4. RESPUESTA FINAL
-            const finalResult = await chatSession.sendMessage([{
-                functionResponse: {
-                    name: call.name,
-                    response: { name: call.name, content: { result: functionResult } }
+                    // Guardamos si hay algo nuevo y relevante
+                    if (nuevasNotas && nuevasNotas !== "SIN_CAMBIOS" && nuevasNotas !== notasPrevias) {
+                        // Aseguramos que el ID de WhatsApp sea el correcto
+                        await dbService.actualizarNotasMascota(perfilCliente.whatsappId, nuevasNotas);
+                        console.log(`✅ Memoria actualizada: ${nuevasNotas}`);
+                    }
+                } catch (e) {
+                    console.error("⚠️ Error en extracción:", e.message);
                 }
-            }]);
+            }
 
-            return { text: finalResult.response.text(), action: actionInfo };
+            if (call && call.name === "escalarAVentas") {
+                return {
+                    text: "¡Qué nota! Mira, te paso con mi equipo de ventas para ayudarte con eso. ¡Dame un segundo! 🙋‍♀️",
+                    action: "HANDOVER_SALES"
+                };
+            }
+
+            return { text: responseText, action: null };
 
         } catch (error) {
-            console.error("🔥 Error en index.js:", error);
-            return { text: "¡Hola! Tuve un pequeño error técnico. ¿Me podrías repetir lo último? 🐾", action: null };
+            console.error("---------- ERROR CRÍTICO ----------");
+            return { text: "¡Ay! Me distraje un segundo. ¿Me repites? 🐾", action: null };
         }
     }
 };
