@@ -1,7 +1,11 @@
 /**
- * ARCHIVO: services/database.js
- * DESCRIPCIÓN: Gestión de Firebase Firestore. 
- * Se encarga de la persistencia de perfiles y la memoria de largo plazo.
+ * ARCHIVO: src/services/database.js
+ * DESCRIPCIÓN: Gestión de persistencia en Firebase Firestore con enfoque en Memoria de Largo Plazo.
+ * Organiza la información para que el asistente reconozca al cliente y sus mascotas permanentemente.
+ * * ESTRUCTURA MEJORADA:
+ * - Colección 'clientes' -> Documento [whatsappId]
+ * - Campos raíz: perfil, memoria_long_term (Conocimiento acumulado), metadata.
+ * - Subcolección: 'historial_chat' (Registro de mensajes).
  */
 
 const admin = require('firebase-admin');
@@ -9,8 +13,13 @@ const path = require('path');
 
 // Inicialización de Firebase Admin SDK
 if (!admin.apps.length) {
-    const serviceAccount = require(path.join(__dirname, '../../firebase-key.json'));
-    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    try {
+        const serviceAccount = require(path.join(__dirname, '../../firebase-key.json'));
+        admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+        console.log("🚀 Conexión con Firebase establecida para Memoria de Largo Plazo.");
+    } catch (error) {
+        console.error("❌ Error cargando configuración de Firebase:", error.message);
+    }
 }
 
 const db = admin.firestore();
@@ -19,9 +28,8 @@ module.exports = {
     db,
 
     /**
-     * Obtiene los datos del cliente o crea uno nuevo si no existe.
-     * @param {string} whatsappId - ID único del cliente (número de teléfono).
-     * @param {string} nombre - Nombre del perfil de WhatsApp.
+     * Obtiene la Ficha Técnica del cliente o crea una nueva.
+     * Diseñado para que la IA lea 'memoria_long_term' y sepa quién es el cliente al instante.
      */
     obtenerOSetearCliente: async (whatsappId, nombre) => {
         try {
@@ -29,58 +37,61 @@ module.exports = {
             const doc = await userRef.get();
 
             if (!doc.exists) {
-                // Si el cliente es nuevo, creamos la estructura base
+                // ESTRUCTURA DE MEMORIA DE POR VIDA
                 const nuevoPerfil = {
                     perfil: {
-                        nombre: nombre || "Amigo/a"
+                        nombre: nombre || "Amigo/a",
+                        fechaRegistro: admin.firestore.FieldValue.serverTimestamp()
                     },
-                    notas_mascota: "", // Campo destinado a la memoria integral (Cliente + Mascota)
+                    // SECCIÓN CRÍTICA: Aquí reside el conocimiento evolutivo
+                    memoria_long_term: {
+                        notas_mascotas: "",      // Segmentado por: [Nombre]: Detalles
+                        preferencias_dueño: "",  // Gustos, ubicación, nivel de experiencia
+                        historial_relevante: ""  // Incidentes pasados o hitos importantes
+                    },
                     metadata: {
                         necesitaAtencionHumana: false,
-                        fechaRegistro: admin.firestore.FieldValue.serverTimestamp(),
-                        ultimaInteraccion: admin.firestore.FieldValue.serverTimestamp()
+                        ultimaInteraccion: admin.firestore.FieldValue.serverTimestamp(),
+                        versionMemoria: 1
                     }
                 };
                 await userRef.set(nuevoPerfil);
                 return nuevoPerfil;
             }
 
-            // Si ya existe, actualizamos la fecha de su última visita
+            // Actualizamos solo la última interacción para mantener el perfil activo
             await userRef.update({
                 'metadata.ultimaInteraccion': admin.firestore.FieldValue.serverTimestamp()
             });
 
             return doc.data();
         } catch (error) {
-            console.error("🔥 Error en database.js (obtenerOSetearCliente):", error);
+            console.error(`🔥 Error recuperando perfil (${whatsappId}):`, error.message);
             throw error;
         }
     },
 
     /**
-     * Guarda la información extraída por la IA sobre el cliente y sus mascotas.
+     * Actualiza la memoria acumulada. No borra el historial, mejora la ficha técnica.
      * @param {string} whatsappId - ID del cliente.
-     * @param {string} nuevasNotas - Texto consolidado con los nuevos datos aprendidos.
+     * @param {Object} dataActualizada - Objeto con los campos de memoria a actualizar.
      */
-
-    actualizarNotasMascota: async (whatsappId, nuevasNotas) => {
+    actualizarMemoriaDePorVida: async (whatsappId, nuevasNotas) => {
         try {
-            // Limpieza básica de la respuesta de la IA
             const notasLimpias = nuevasNotas ? nuevasNotas.replace(/SIN_CAMBIOS/g, "").trim() : "";
-
-            if (!notasLimpias || notasLimpias.length < 3) return;
+            if (!notasLimpias || notasLimpias.length < 5) return;
 
             const userRef = db.collection('clientes').doc(whatsappId);
 
-            // Forzamos la actualización del campo específico
+            // Actualizamos la memoria sin tocar el historial ni los datos básicos del perfil
             await userRef.update({
-                "notas_mascota": notasLimpias,
-                "metadata.ultimaActualizacionNotas": admin.firestore.FieldValue.serverTimestamp()
+                "memoria_long_term.notas_mascotas": notasLimpias,
+                "metadata.ultimaActualizacionMemoria": admin.firestore.FieldValue.serverTimestamp()
             });
 
-            console.log(`✅ Memoria grabada en documento: ${whatsappId}`);
+            console.log(`🧠 Memoria de largo plazo sincronizada para: ${whatsappId}`);
         } catch (error) {
-            console.error("🔥 Error escribiendo en Firestore:", error.message);
+            console.error("🔥 Error escribiendo en la memoria permanente:", error.message);
         }
     }
 };
